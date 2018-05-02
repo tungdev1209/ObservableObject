@@ -1,16 +1,27 @@
 //
 //  ObservableObject.m
-//  ReactiveObject
+//  eLearning
 //
 //  Created by Tung Nguyen on 2/2/18.
-//  Copyright © 2018 Tung Nguyen. All rights reserved.
+//  Copyright © 2018 Joz. All rights reserved.
 //
 
 #import "ObservableObject.h"
 #import "ObservableObject+Private.h"
 #import <objc/runtime.h>
 
+#pragma mark - ========== CleanBag ============
+
 @implementation CleanBag
+
+- (instancetype)init
+{
+    self = [super init];
+    if (self) {
+        self.bagId = [CleanBag getRunTimeId];
+    }
+    return self;
+}
 
 static dispatch_queue_t getUUIDQueue() {
     static dispatch_once_t onceToken;
@@ -39,40 +50,83 @@ static dispatch_queue_t getUUIDQueue() {
     return uuid1;
 }
 
-+(instancetype)bag {
-    return [[CleanBag alloc] init];
++(NSString *)getRunTimeId {
+    return [CleanBag getUUIDType1];
 }
 
--(NSString *)bagId {
-    if (!_bagId) {
-        _bagId = [CleanBag getUUIDType1];
+-(NSHashTable *)subcribers {
+    if (!_subcribers) {
+        _subcribers = [[NSHashTable alloc] initWithOptions:NSPointerFunctionsWeakMemory capacity:20];
     }
-    return _bagId;
+    return _subcribers;
 }
 
--(NSHashTable *)observables {
-    if (!_observables) {
-        _observables = [[NSHashTable alloc] initWithOptions:NSPointerFunctionsWeakMemory capacity:20];
-    }
-    return _observables;
+-(void)removeAllSubcribers {
+    [self.subcribers removeAllObjects];
 }
 
--(void)removeAllObservables {
-    [self.observables removeAllObjects];
-}
-
--(void)registerObservableObject:(ObservableObject *)object {
-    [self.observables addObject:object];
+-(void)registerSubcriberObject:(Subcriber *)sub {
+    [self.subcribers addObject:sub];
 }
 
 -(void)dealloc {
     NSLog(@"CleanBag === DEALLOC");
-    for (ObservableObject *object in self.observables.allObjects) {
-        object.bag = nil;
+    for (Subcriber *sub in self.subcribers.allObjects) {
+        sub.bag = nil;
     }
 }
 
 @end
+
+#pragma mark - ========== Subcriber ============
+
+@implementation Subcriber
+
+- (instancetype)init
+{
+    self = [super init];
+    if (self) {
+        self.subcriberId = [CleanBag getRunTimeId];
+    }
+    return self;
+}
+
+-(void)cleanupBy:(CleanBag *)bag {
+    if ([bag.bagId isEqualToString:self.bag.bagId]) {
+        NSLog(@"same bag");
+        return;
+    }
+    if (self.bag) {
+        [self removeObservingBag];
+    }
+    self.bag = bag;
+    [bag registerSubcriberObject:self];
+    [self addObservingBag];
+}
+
+-(void)addObservingBag {
+    [self addObserver:self forKeyPath:NSStringFromSelector(@selector(bag)) options:NSKeyValueObservingOptionNew context:nil];
+}
+
+-(void)removeObservingBag {
+    @try {
+        [self removeObserver:self forKeyPath:NSStringFromSelector(@selector(bag)) context:nil];
+    } @catch (NSException *exception) {
+        NSLog(@"remove error: %@", exception);
+    }
+}
+
+-(void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context {
+    NSLog(@"Subcriber === observed keypath: %@ from object: %@", object, keyPath);
+    if ([keyPath isEqualToString:NSStringFromSelector(@selector(bag))] && self.bag == nil) {
+        [self removeObservingBag];
+        [self.observableObj removeSubcriberWithId:self.subcriberId];
+    }
+}
+
+@end
+
+#pragma mark - ========== ObservableObject ============
 
 @implementation ObservableObject
 
@@ -80,7 +134,7 @@ static dispatch_queue_t getUUIDQueue() {
 - (instancetype)init {
     self = [super init];
     if (self) {
-        self.objectID = [CleanBag getUUIDType1];
+        self.objectID = [CleanBag getRunTimeId];
     }
     return self;
 }
@@ -112,44 +166,22 @@ static dispatch_queue_t getUUIDQueue() {
     return self;
 }
 
--(ObservableObject *_Nonnull)subcribe:(SubcribeBlock _Nonnull)subcriber {
+-(Subcriber *_Nonnull)subcribe:(SubcribeBlock _Nonnull)subBlock {
+    __block Subcriber *subcriber;
     dispatch_sync(self.excutionQueue, ^{
-        [self addObservingProperties];
-        
-        NSString *blockId = [CleanBag getUUIDType1];
-        [self.subcriberById setObject:subcriber forKey:blockId];
-        [self.observers addObject:blockId];
+        subcriber = [self addSubcriberWithBlock:subBlock];
+        [self.subcriberIds addObject:subcriber.subcriberId];
     });
-    return self;
+    return subcriber;
 }
 
--(ObservableObject *_Nonnull)subcribeKeySelector:(SEL _Nonnull)propertySelector binding:(SubcribeBlock _Nonnull)subcriber {
+-(Subcriber *_Nonnull)subcribeKeySelector:(SEL _Nonnull)propertySelector binding:(SubcribeBlock _Nonnull)subBlock {
+    __block Subcriber *subcriber;
     dispatch_sync(self.excutionQueue, ^{
-        [self addObservingProperties];
-        
-        NSString *blockId = [CleanBag getUUIDType1];
-        [self.subcriberById setObject:subcriber forKey:blockId];
-        
-        NSString *keyPath = NSStringFromSelector(propertySelector);
-        NSMutableArray *subs = [self selectorSubcribingBlocks:keyPath];
-        [subs addObject:blockId];
-        [self.selectorObservers setObject:subs forKey:keyPath];
+        subcriber = [self addSubcriberWithBlock:subBlock];
+        [self addSubcriber:subcriber forKeyPath:NSStringFromSelector(propertySelector)];
     });
-    return self;
-}
-
--(void)cleanupBy:(CleanBag *)bag {
-    if ([bag.bagId isEqualToString:self.bag.bagId]) {
-        NSLog(@"same bag");
-        return;
-    }
-    if (self.bag) {
-        [self removeObservingBag];
-    }
-    [self.bag removeAllObservables];
-    self.bag = bag;
-    [bag registerObservableObject:self];
-    [self addObservingBag];
+    return subcriber;
 }
 
 #pragma mark Subclass funs
@@ -166,28 +198,52 @@ static dispatch_queue_t getUUIDQueue() {
         return;
     }
     
-    if ([keyPath isEqualToString:NSStringFromSelector(@selector(bag))] && self.bag == nil) {
-        [self cleanbagDealloc];
-        [[NSNotificationCenter defaultCenter] postNotificationName:kCleanBagDealloc object:nil];
-        return;
-    }
-    
     dispatch_sync(self.excutionQueue, ^{
         // fire keypath event
-        NSMutableArray *propertySelectorSubcribers = self.selectorObservers[keyPath];
-        for (NSString *blockId in propertySelectorSubcribers) {
-            SubcribeBlock block = self.subcriberById[blockId];
-            block([self valueForKey:keyPath]);
+        NSMutableArray *propertySelectorSubcriberIds = self.selectorSubcribers[keyPath];
+        for (NSString *subcriberId in propertySelectorSubcriberIds) {
+            SubcribeBlock block = self.subcriberById[subcriberId].subBlock;
+            block(keyPath, [self valueForKey:keyPath]);
         }
         
         // fire main event
-        for (NSString *subBlockId in self.observers) {
-            SubcribeBlock block = self.subcriberById[subBlockId];
-            block([self valueForKey:keyPath]);
+        for (NSString *subcriberId in self.subcriberIds) {
+            SubcribeBlock block = self.subcriberById[subcriberId].subBlock;
+            block(keyPath, [self valueForKey:keyPath]);
         }
         
         [self didObserveKeypath:keyPath];
     });
+}
+
+-(Subcriber *)addSubcriberWithBlock:(SubcribeBlock)subBlock {
+    [self addObservingProperties];
+    
+    Subcriber *subcriber = [[Subcriber alloc] init];
+    subcriber.subBlock = subBlock;
+    subcriber.observableObj = self;
+    
+    [self.subcriberById setObject:subcriber forKey:subcriber.subcriberId];
+    return subcriber;
+}
+
+-(void)addSubcriber:(Subcriber *)subcriber forKeyPath:(NSString *)keyPath {
+    NSMutableArray *subs = self.selectorSubcribers[keyPath];
+    if (!subs) {
+        subs = [[NSMutableArray alloc] init];
+    }
+    [subs addObject:subcriber.subcriberId];
+    [self.selectorSubcribers setObject:subs forKey:keyPath];
+}
+
+-(void)removeSubcriberWithId:(NSString *)subcriberId {
+    [self.subcriberIds removeObject:subcriberId];
+    [self.subcriberById removeObjectForKey:subcriberId];
+    NSMutableArray *selectorSubcriberIds;
+    for (NSString *keyPath in self.selectorSubcribers.allKeys) {
+        selectorSubcriberIds = self.selectorSubcribers[keyPath];
+        [selectorSubcriberIds removeObject:subcriberId];
+    }
 }
 
 -(void)syncupValues {
@@ -273,11 +329,8 @@ static dispatch_queue_t getUUIDQueue() {
 
 -(void)removeSubcribers {
     dispatch_sync(self.excutionQueue, ^{
-        [self.observers removeAllObjects];
-        for (NSString *key in self.selectorObservers.allKeys) {
-            [self.selectorObservers[key] removeAllObjects];
-        }
-        [self.selectorObservers removeAllObjects];
+        [self.subcriberIds removeAllObjects];
+        [self.selectorSubcribers removeAllObjects];
         [self.subcriberById removeAllObjects];
     });
 }
@@ -295,33 +348,25 @@ static dispatch_queue_t getUUIDQueue() {
 }
 
 #pragma mark lazy loading
--(NSMutableArray *)observers {
-    if (!_observers) {
-        _observers = [[NSMutableArray alloc] init];
+-(NSMutableArray<NSString *> *)subcriberIds {
+    if (!_subcriberIds) {
+        _subcriberIds = [[NSMutableArray alloc] init];
     }
-    return _observers;
+    return _subcriberIds;
 }
 
--(NSMutableDictionary<NSString *,NSMutableArray<NSString *> *> *)selectorObservers {
-    if (!_selectorObservers) {
-        _selectorObservers = [[NSMutableDictionary alloc] init];
-    }
-    return _selectorObservers;
-}
-
--(NSMutableDictionary<NSString *,SubcribeBlock> *)subcriberById {
+-(NSMutableDictionary<NSString *, Subcriber *> *)subcriberById {
     if (!_subcriberById) {
         _subcriberById = [[NSMutableDictionary alloc] init];
     }
     return _subcriberById;
 }
 
--(NSMutableArray *)selectorSubcribingBlocks:(NSString *)keyPath {
-    NSMutableArray *subs = self.selectorObservers[keyPath];
-    if (!subs) {
-        subs = [[NSMutableArray alloc] init];
+-(NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *)selectorSubcribers {
+    if (!_selectorSubcribers) {
+        _selectorSubcribers = [[NSMutableDictionary alloc] init];
     }
-    return subs;
+    return _selectorSubcribers;
 }
 
 -(dispatch_queue_t)excutionQueue {
@@ -339,14 +384,10 @@ static dispatch_queue_t getUUIDQueue() {
 }
 
 #pragma mark - Dealloc
--(void)cleanbagDealloc {
+- (void)dealloc {
     [self removeObservingProperties];
     [self removeSyncupObservingProperties];
     [self removeSubcribers];
-}
-
-- (void)dealloc {
-    [self cleanbagDealloc];
 }
 
 @end
