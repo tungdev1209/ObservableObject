@@ -27,7 +27,7 @@ static dispatch_queue_t getUUIDQueue() {
     static dispatch_once_t onceToken;
     static dispatch_queue_t theQueue = nil;
     dispatch_once(&onceToken, ^{
-        theQueue = dispatch_queue_create("com.elearning.observable.cleanbag", DISPATCH_QUEUE_SERIAL);
+        theQueue = dispatch_queue_create("com.observable.cleanbag", DISPATCH_QUEUE_SERIAL);
     });
     return theQueue;
 }
@@ -266,13 +266,15 @@ static dispatch_queue_t getUUIDQueue() {
 
 #pragma mark add/remove funcs
 -(void)addObservingProperties {
+    __weak typeof(self) weakSelf = self;
     dispatch_sync(self.observerQueue, ^{
-        if (_obsAdded) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf.obsAdded) {
             return;
         }
-        _obsAdded = YES;
+        strongSelf.obsAdded = YES;
         
-        [self addObservingPropertiesForObject:self];
+        [strongSelf addObservingPropertiesForObject:strongSelf];
     });
 }
 
@@ -296,11 +298,13 @@ static dispatch_queue_t getUUIDQueue() {
 }
 
 -(void)removeObservingProperties {
+    __weak typeof(self) weakSelf = self;
     dispatch_sync(self.observerQueue, ^{
-        if (_obsAdded) {
-            [self removeObservingPropertiesForObject:self];
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf.obsAdded) {
+            [strongSelf removeObservingPropertiesForObject:strongSelf];
         }
-        _obsAdded = NO;
+        strongSelf.obsAdded = NO;
     });
 }
 
@@ -335,18 +339,6 @@ static dispatch_queue_t getUUIDQueue() {
     });
 }
 
--(void)addObservingBag {
-    [self addObserver:self forKeyPath:NSStringFromSelector(@selector(bag)) options:NSKeyValueObservingOptionNew context:nil];
-}
-
--(void)removeObservingBag {
-    @try {
-        [self removeObserver:self forKeyPath:NSStringFromSelector(@selector(bag)) context:nil];
-    } @catch (NSException *exception) {
-        NSLog(@"remove error: %@", exception);
-    }
-}
-
 #pragma mark lazy loading
 -(NSMutableArray<NSString *> *)subcriberIds {
     if (!_subcriberIds) {
@@ -371,14 +363,14 @@ static dispatch_queue_t getUUIDQueue() {
 
 -(dispatch_queue_t)excutionQueue {
     if (!_excutionQueue) {
-        _excutionQueue = dispatch_queue_create("com.elearning.observable.excution", DISPATCH_QUEUE_SERIAL);
+        _excutionQueue = dispatch_queue_create("com.observable.excution", DISPATCH_QUEUE_SERIAL);
     }
     return _excutionQueue;
 }
 
 -(dispatch_queue_t)observerQueue {
     if (!_observerQueue) {
-        _observerQueue = dispatch_queue_create("com.elearning.observable.observer", DISPATCH_QUEUE_SERIAL);
+        _observerQueue = dispatch_queue_create("com.observable.observer", DISPATCH_QUEUE_SERIAL);
     }
     return _observerQueue;
 }
