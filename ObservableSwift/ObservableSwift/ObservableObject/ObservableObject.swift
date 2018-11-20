@@ -14,7 +14,7 @@ let kCleanBagDealloc = "CleanBag_Dealloc"
 let kCleanBagObjectId = "CleanBag_ObjectId"
 
 class CleanBag: NSObject {
-    fileprivate let badId = NSUUID.createBaseTime()
+    fileprivate let bagId = NSUUID.createBaseTime()
     fileprivate let subcribers = NSHashTable<AnyObject>(options: NSPointerFunctions.Options.weakMemory)
     fileprivate func registerSubcriberObject(_ subcriber: Subcriber) {
         subcribers.add(subcriber)
@@ -39,21 +39,21 @@ class Subcriber: NSObject {
     fileprivate weak var observableObj: ObservableObject?
     
     func cleanupBy(_ b: CleanBag) {
-        guard b.badId != bag?.badId else {return}
+        guard b.bagId != bag?.bagId else {return}
         if let _ = bag {
             removeObservingBag()
         }
         bag = b
         b.registerSubcriberObject(self)
-        
-    }
-    
-    func removeObservingBag() {
-        removeObserver(self, forKeyPath: #keyPath(Subcriber.bag), context: nil)
+        addObservingBag()
     }
     
     func addObservingBag() {
         addObserver(self, forKeyPath: #keyPath(Subcriber.bag), options: NSKeyValueObservingOptions.new, context: nil)
+    }
+    
+    func removeObservingBag() {
+        removeObserver(self, forKeyPath: #keyPath(Subcriber.bag), context: nil)
     }
     
     override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
@@ -72,6 +72,29 @@ class ObservableObject: NSObject {
     fileprivate let executionQueue = DispatchQueue(label: "com.observable.execution")
     fileprivate var obsAdded = false
     fileprivate let objectID = NSUUID.createBaseTime()
+    
+    fileprivate var syncupObject: ObservableObject?
+    
+    func syncupWithObject(_ object: ObservableObject) -> ObservableObject {
+        guard syncupObject?.objectID != objectID else {return self}
+        executionQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            if let _ = self.syncupObject {
+                self.removeSyncupObservingProperties()
+            }
+            self.syncupObject = object
+            self.addSyncupObservingProperties()
+        }
+        return self
+    }
+    
+    func removeSyncupObject() -> ObservableObject {
+        if let _ = syncupObject {
+            removeSyncupObservingProperties()
+            syncupObject = nil
+        }
+        return self
+    }
     
     func subcribe(_ block: SubcribeBlock?) -> Subcriber {
         var subcriber: Subcriber!
@@ -95,6 +118,12 @@ class ObservableObject: NSObject {
     
     override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
         guard let kPath = keyPath else {return}
+        
+        if let obj = object as? ObservableObject, obj.objectID == syncupObject?.objectID {
+            syncupValueForKeyPath(kPath)
+            return
+        }
+        
         executionQueue.sync { [weak self] in
             guard let `self` = self else {return}
             guard let propertySelectorSubcriberIds = selectorSubcribers[kPath] else {return}
@@ -126,7 +155,7 @@ class ObservableObject: NSObject {
     func addSubcriber(_ subcriber: Subcriber, keyPath: String) {
         var subs = selectorSubcribers[keyPath]
         if subs == nil {
-            subs = [String]()
+            subs = []
         }
         subs!.append(subcriber.subcriberId)
         selectorSubcribers[keyPath] = subs
@@ -142,30 +171,64 @@ class ObservableObject: NSObject {
         }
     }
     
+    func syncupValues() {
+        guard let syncupObj = syncupObject else {return}
+        for case let (label, _) in Mirror.init(reflecting: syncupObj).children {
+            guard let keyPath = label else {continue}
+            syncupValueForKeyPath(keyPath)
+        }
+    }
+    
+    func syncupValueForKeyPath(_ keyPath: String) {
+        let value = syncupObject?.value(forKey: keyPath)
+        setValue(value, forKey: keyPath)
+    }
+    
+    // MARK: add/remove funcs
     func addObservingProperties() {
         observationQueue.sync { [weak self] in
             guard let `self` = self else {return}
+            guard !self.obsAdded else {return}
+            self.obsAdded = true
             self.addObservingPropertiesForObject(self)
+        }
+    }
+    
+    func addSyncupObservingProperties() {
+        observationQueue.sync { [weak self] in
+            guard let `self` = self, let obj = self.syncupObject else {return}
+            self.addObservingPropertiesForObject(obj)
+        }
+    }
+    
+    func addObservingPropertiesForObject(_ object: NSObject) {
+        for case let (label, _) in Mirror.init(reflecting: object).children {
+            guard let keyPath = label else {continue}
+            object.addObserver(self, forKeyPath: keyPath, options: NSKeyValueObservingOptions.new, context: nil)
         }
     }
     
     func removeObservingProperties() {
         observationQueue.sync { [weak self] in
             guard let `self` = self else {return}
+            guard self.obsAdded else {return}
+            self.obsAdded = false
             self.removeObservingPropertiesForObject(self)
         }
     }
     
-    func addObservingPropertiesForObject(_ object: NSObject) {
-        
+    func removeSyncupObservingProperties() {
+        observationQueue.sync { [weak self] in
+            guard let `self` = self, let obj = self.syncupObject else {return}
+            self.removeObservingPropertiesForObject(obj)
+        }
     }
     
     func removeObservingPropertiesForObject(_ object: NSObject) {
-        
-    }
-    
-    func removeObservingPropertiesForObject() {
-        
+        for case let (label, _) in Mirror.init(reflecting: object).children {
+            guard let keyPath = label else {continue}
+            object.removeObserver(self, forKeyPath: keyPath)
+        }
     }
     
     func removeSubcribers() {
@@ -179,6 +242,7 @@ class ObservableObject: NSObject {
     
     deinit {
         removeObservingProperties()
+        removeSyncupObservingProperties()
         removeSubcribers()
     }
 }
