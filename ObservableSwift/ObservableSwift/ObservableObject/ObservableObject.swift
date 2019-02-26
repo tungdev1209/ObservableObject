@@ -16,17 +16,28 @@ let kCleanBagObjectId = "CleanBag_ObjectId"
 class CleanBag: NSObject {
     fileprivate let bagId = NSUUID.createBaseTime()
     fileprivate let subcribers = NSHashTable<AnyObject>(options: NSPointerFunctions.Options.weakMemory)
+    fileprivate let subcriberQueue = DispatchQueue.init(label: "com.obj.cleanbag.subs")
+    
     fileprivate func registerSubcriberObject(_ subcriber: Subcriber) {
-        subcribers.add(subcriber)
+        subcriberQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            self.subcribers.add(subcriber)
+        }
     }
     
     fileprivate func removeAllSubcribers() {
-        subcribers.removeAllObjects()
+        subcriberQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            self.subcribers.removeAllObjects()
+        }
     }
     
     deinit {
-        for sub in subcribers.allObjects as! [Subcriber] {
-            sub.bag = nil
+        subcriberQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            for sub in self.subcribers.allObjects as! [Subcriber] {
+                sub.bag = nil
+            }
         }
     }
 }
@@ -37,6 +48,7 @@ class Subcriber: NSObject {
     fileprivate let subcriberId = NSUUID.createBaseTime()
     @objc fileprivate weak var bag: CleanBag?
     fileprivate weak var observableObj: ObservableObject?
+    fileprivate let observeQueue = DispatchQueue.init(label: "com.obj.subcriber.observe")
     
     func cleanupBy(_ b: CleanBag) {
         guard b.bagId != bag?.bagId else {return}
@@ -49,11 +61,17 @@ class Subcriber: NSObject {
     }
     
     func addObservingBag() {
-        addObserver(self, forKeyPath: #keyPath(Subcriber.bag), options: NSKeyValueObservingOptions.new, context: nil)
+        observeQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            addObserver(self, forKeyPath: #keyPath(Subcriber.bag), options: NSKeyValueObservingOptions.new, context: nil)
+        }
     }
     
     func removeObservingBag() {
-        removeObserver(self, forKeyPath: #keyPath(Subcriber.bag), context: nil)
+        observeQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            removeObserver(self, forKeyPath: #keyPath(Subcriber.bag), context: nil)
+        }
     }
     
     override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
@@ -70,6 +88,9 @@ class ObservableObject: NSObject {
     fileprivate var subcriberById = [String: Subcriber]()
     fileprivate let observationQueue = DispatchQueue(label: "com.observable.observation")
     fileprivate let executionQueue = DispatchQueue(label: "com.observable.execution")
+    fileprivate let selectorSubQueue = DispatchQueue(label: "com.observable.selectorsubcriber")
+    fileprivate let subIdsQueue = DispatchQueue(label: "com.observable.subcriberid")
+    fileprivate let subByIdsQueue = DispatchQueue(label: "com.observable.subcriberbyid")
     fileprivate var obsAdded = false
     fileprivate let objectID = NSUUID.createBaseTime()
     
@@ -101,7 +122,7 @@ class ObservableObject: NSObject {
         executionQueue.sync { [weak self] in
             guard let `self` = self else {return}
             subcriber = self.addSubcriberWithBlock(block)
-            subcriberIds.append(subcriber.subcriberId)
+            self.subcriberIds.append(subcriber.subcriberId)
         }
         return subcriber
     }
@@ -126,16 +147,25 @@ class ObservableObject: NSObject {
         
         executionQueue.sync { [weak self] in
             guard let `self` = self else {return}
-            guard let propertySelectorSubcriberIds = selectorSubcribers[kPath] else {return}
-            for subcriberId in propertySelectorSubcriberIds {
-                if let sub = self.subcriberById[subcriberId] {
-                    sub.subBlock?(kPath, value(forKey: kPath))
+            self.subByIdsQueue.sync { [weak self] in
+                guard let `self` = self else {return}
+                guard let propertySelectorSubcriberIds = self.selectorSubcribers[kPath] else {return}
+                
+                self.selectorSubQueue.sync { [weak self] in
+                    guard let `self` = self else {return}
+                    for subcriberId in propertySelectorSubcriberIds {
+                        if let sub = self.subcriberById[subcriberId] {
+                            sub.subBlock?(kPath, value(forKey: kPath))
+                        }
+                    }
                 }
-            }
-            
-            for subcriberId in subcriberIds {
-                if let sub = self.subcriberById[subcriberId] {
-                    sub.subBlock?(kPath, value(forKey: kPath))
+                self.subIdsQueue.sync { [weak self] in
+                    guard let `self` = self else {return}
+                    for subcriberId in self.subcriberIds {
+                        if let sub = self.subcriberById[subcriberId] {
+                            sub.subBlock?(kPath, value(forKey: kPath))
+                        }
+                    }
                 }
             }
         }
@@ -148,26 +178,39 @@ class ObservableObject: NSObject {
         subcriber.subBlock = subBlock
         subcriber.observableObj = self
         
-        subcriberById[subcriber.subcriberId] = subcriber
+        subByIdsQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            self.subcriberById[subcriber.subcriberId] = subcriber
+        }
+        
         return subcriber
     }
     
     func addSubcriber(_ subcriber: Subcriber, keyPath: String) {
-        var subs = selectorSubcribers[keyPath]
-        if subs == nil {
-            subs = []
+        selectorSubQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            var subs = self.selectorSubcribers[keyPath] ?? []
+            subs.append(subcriber.subcriberId)
+            self.selectorSubcribers[keyPath] = subs
         }
-        subs!.append(subcriber.subcriberId)
-        selectorSubcribers[keyPath] = subs
     }
     
     func removeSubcriberWithId(_ subcriberId: String) {
-        subcriberIds = subcriberIds.filter({ $0 != subcriberId })
-        subcriberById.removeValue(forKey: subcriberId)
-        for keyPath in selectorSubcribers.keys {
-            var selectorSubcriberIds = selectorSubcribers[keyPath]
-            selectorSubcriberIds = selectorSubcriberIds?.filter({ $0 != subcriberId })
-            selectorSubcribers[keyPath] = selectorSubcriberIds
+        subIdsQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            self.subcriberIds = subcriberIds.filter({ $0 != subcriberId })
+        }
+        subByIdsQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            self.subcriberById.removeValue(forKey: subcriberId)
+        }
+        selectorSubQueue.sync { [weak self] in
+            guard let `self` = self else {return}
+            for keyPath in self.selectorSubcribers.keys {
+                var selectorSubcriberIds = self.selectorSubcribers[keyPath]
+                selectorSubcriberIds = selectorSubcriberIds?.filter({ $0 != subcriberId })
+                self.selectorSubcribers[keyPath] = selectorSubcriberIds
+            }
         }
     }
     
@@ -251,8 +294,8 @@ let UUIDQueue = DispatchQueue.init(label: "com.nsuuid.basetime")
 extension NSUUID {
     static func createBaseTime() -> String {
         var uuidString: String = ""
+        let uuidSize = MemoryLayout.size(ofValue: uuid_t.self)
         UUIDQueue.sync {
-            let uuidSize = MemoryLayout.size(ofValue: uuid_t.self)
             let uuidPointer = UnsafeMutablePointer<UInt8>.allocate(capacity: uuidSize)
             uuid_generate_time(uuidPointer)
             let uuid = NSUUID(uuidBytes: uuidPointer)

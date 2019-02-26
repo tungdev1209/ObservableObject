@@ -10,20 +10,22 @@
 #import "ObservableObject+Private.h"
 #import <objc/runtime.h>
 
-#pragma mark - ========== CleanBag ============
+#define weakify(var) __weak typeof(var) weak_##var = var
+#define strongify(var) \
+_Pragma("clang diagnostic push") \
+_Pragma("clang diagnostic ignored \"-Wshadow\"") \
+__strong typeof(var) var = weak_##var \
+_Pragma("clang diagnostic pop")
 
-@implementation CleanBag
+@interface NSUUID (Ext)
 
-- (instancetype)init
-{
-    self = [super init];
-    if (self) {
-        self.bagId = [CleanBag getRunTimeId];
-    }
-    return self;
-}
++(NSString *)createBaseTime;
 
-static dispatch_queue_t getUUIDQueue() {
+@end
+
+@implementation NSUUID (Ext)
+
+static dispatch_queue_t UUIDQueue() {
     static dispatch_once_t onceToken;
     static dispatch_queue_t theQueue = nil;
     dispatch_once(&onceToken, ^{
@@ -32,17 +34,14 @@ static dispatch_queue_t getUUIDQueue() {
     return theQueue;
 }
 
-//http://stackoverflow.com/questions/9015784/how-to-create-uuid-type-1-in-objective-c-ios/9015962#9015962
-+(NSString *)getUUIDType1 {
++(NSString *)createBaseTime {
     __block NSString *uuid1;
-    dispatch_sync(getUUIDQueue(), ^{
+    dispatch_sync(UUIDQueue(), ^{
         // Get UUID type 1
-        
         uuid_t dateUUID;
         uuid_generate_time(dateUUID);
         
         // Convert it to string
-        
         uuid_string_t unparsedUUID;
         uuid_unparse_lower(dateUUID, unparsedUUID);
         uuid1 = [[NSString alloc] initWithUTF8String:unparsedUUID];
@@ -50,8 +49,20 @@ static dispatch_queue_t getUUIDQueue() {
     return uuid1;
 }
 
-+(NSString *)getRunTimeId {
-    return [CleanBag getUUIDType1];
+@end
+
+#pragma mark - ========== CleanBag ============
+
+@implementation CleanBag
+
+- (instancetype)init
+{
+    self = [super init];
+    if (self) {
+        self.bagId = [NSUUID createBaseTime];
+        self.subcriberQueue = dispatch_queue_create("com.obj.cleanbag.subs", DISPATCH_QUEUE_SERIAL);
+    }
+    return self;
 }
 
 -(NSHashTable *)subcribers {
@@ -62,18 +73,30 @@ static dispatch_queue_t getUUIDQueue() {
 }
 
 -(void)removeAllSubcribers {
-    [self.subcribers removeAllObjects];
+    weakify(self);
+    dispatch_sync(_subcriberQueue, ^{
+        strongify(self);
+        [self.subcribers removeAllObjects];
+    });
 }
 
 -(void)registerSubcriberObject:(Subcriber *)sub {
-    [self.subcribers addObject:sub];
+    weakify(self);
+    dispatch_sync(_subcriberQueue, ^{
+        strongify(self);
+        [self.subcribers addObject:sub];
+    });
 }
 
 -(void)dealloc {
     NSLog(@"CleanBag === DEALLOC");
-    for (Subcriber *sub in self.subcribers.allObjects) {
-        sub.bag = nil;
-    }
+    weakify(self);
+    dispatch_sync(_subcriberQueue, ^{
+        strongify(self);
+        for (Subcriber *sub in self.subcribers.allObjects) {
+            sub.bag = nil;
+        }
+    });
 }
 
 @end
@@ -86,7 +109,8 @@ static dispatch_queue_t getUUIDQueue() {
 {
     self = [super init];
     if (self) {
-        self.subcriberId = [CleanBag getRunTimeId];
+        self.subcriberId = [NSUUID createBaseTime];
+        self.observeQueue = dispatch_queue_create("com.obj.subcriber.observe", DISPATCH_QUEUE_SERIAL);
     }
     return self;
 }
@@ -134,7 +158,7 @@ static dispatch_queue_t getUUIDQueue() {
 - (instancetype)init {
     self = [super init];
     if (self) {
-        self.objectID = [CleanBag getRunTimeId];
+        self.objectID = [NSUUID createBaseTime];
     }
     return self;
 }
@@ -148,7 +172,9 @@ static dispatch_queue_t getUUIDQueue() {
         NSLog(@"syncup with same object");
         return self;
     }
+    weakify(self);
     dispatch_sync(self.excutionQueue, ^{
+        strongify(self);
         if (self.syncupObject) {
             [self removeSyncupObservingProperties];
         }
@@ -168,7 +194,9 @@ static dispatch_queue_t getUUIDQueue() {
 
 -(Subcriber *_Nonnull)subcribe:(SubcribeBlock _Nonnull)subBlock {
     __block Subcriber *subcriber;
+    weakify(self);
     dispatch_sync(self.excutionQueue, ^{
+        strongify(self);
         subcriber = [self addSubcriberWithBlock:subBlock];
         [self.subcriberIds addObject:subcriber.subcriberId];
     });
@@ -177,7 +205,9 @@ static dispatch_queue_t getUUIDQueue() {
 
 -(Subcriber *_Nonnull)subcribeKeySelector:(SEL _Nonnull)propertySelector binding:(SubcribeBlock _Nonnull)subBlock {
     __block Subcriber *subcriber;
+    weakify(self);
     dispatch_sync(self.excutionQueue, ^{
+        strongify(self);
         subcriber = [self addSubcriberWithBlock:subBlock];
         [self addSubcriber:subcriber forKeyPath:NSStringFromSelector(propertySelector)];
     });
@@ -198,19 +228,32 @@ static dispatch_queue_t getUUIDQueue() {
         return;
     }
     
+    weakify(self);
     dispatch_sync(self.excutionQueue, ^{
-        // fire keypath event
-        NSMutableArray *propertySelectorSubcriberIds = self.selectorSubcribers[keyPath];
-        for (NSString *subcriberId in propertySelectorSubcriberIds) {
-            SubcribeBlock block = self.subcriberById[subcriberId].subBlock;
-            block(keyPath, [self valueForKey:keyPath]);
-        }
-        
-        // fire main event
-        for (NSString *subcriberId in self.subcriberIds) {
-            SubcribeBlock block = self.subcriberById[subcriberId].subBlock;
-            block(keyPath, [self valueForKey:keyPath]);
-        }
+        strongify(self);
+        dispatch_sync(self.subByIdsQueue, ^{
+            strongify(self);
+            NSMutableArray *propertySelectorSubcriberIds = self.selectorSubcribers[keyPath];
+            if (propertySelectorSubcriberIds.count == 0) {return;}
+            
+            // fire keypath event
+            dispatch_sync(self.selectorSubQueue, ^{
+                strongify(self);
+                for (NSString *subcriberId in propertySelectorSubcriberIds) {
+                    SubcribeBlock block = self.subcriberById[subcriberId].subBlock;
+                    block(keyPath, [self valueForKey:keyPath]);
+                }
+            });
+            
+            // fire main event
+            dispatch_sync(self.subIdsQueue, ^{
+                strongify(self);
+                for (NSString *subcriberId in self.subcriberIds) {
+                    SubcribeBlock block = self.subcriberById[subcriberId].subBlock;
+                    block(keyPath, [self valueForKey:keyPath]);
+                }
+            });
+        });
         
         [self didObserveKeypath:keyPath];
     });
@@ -223,27 +266,47 @@ static dispatch_queue_t getUUIDQueue() {
     subcriber.subBlock = subBlock;
     subcriber.observableObj = self;
     
-    [self.subcriberById setObject:subcriber forKey:subcriber.subcriberId];
+    weakify(self);
+    dispatch_sync(self.subByIdsQueue, ^{
+        strongify(self);
+        [self.subcriberById setObject:subcriber forKey:subcriber.subcriberId];
+    });
+    
     return subcriber;
 }
 
 -(void)addSubcriber:(Subcriber *)subcriber forKeyPath:(NSString *)keyPath {
-    NSMutableArray *subs = self.selectorSubcribers[keyPath];
-    if (!subs) {
-        subs = [[NSMutableArray alloc] init];
-    }
-    [subs addObject:subcriber.subcriberId];
-    [self.selectorSubcribers setObject:subs forKey:keyPath];
+    weakify(self);
+    dispatch_sync(self.selectorSubQueue, ^{
+        strongify(self);
+        NSMutableArray *subs = self.selectorSubcribers[keyPath];
+        if (!subs) {
+            subs = [[NSMutableArray alloc] init];
+        }
+        [subs addObject:subcriber.subcriberId];
+        [self.selectorSubcribers setObject:subs forKey:keyPath];
+    });
 }
 
 -(void)removeSubcriberWithId:(NSString *)subcriberId {
-    [self.subcriberIds removeObject:subcriberId];
-    [self.subcriberById removeObjectForKey:subcriberId];
-    NSMutableArray *selectorSubcriberIds;
-    for (NSString *keyPath in self.selectorSubcribers.allKeys) {
-        selectorSubcriberIds = self.selectorSubcribers[keyPath];
-        [selectorSubcriberIds removeObject:subcriberId];
-    }
+    weakify(self);
+    dispatch_sync(self.subIdsQueue, ^{
+        strongify(self);
+        [self.subcriberIds removeObject:subcriberId];
+    });
+    dispatch_sync(self.subByIdsQueue, ^{
+        strongify(self);
+        [self.subcriberById removeObjectForKey:subcriberId];
+    });
+    
+    dispatch_sync(self.selectorSubQueue, ^{
+        strongify(self);
+        NSMutableArray *selectorSubcriberIds;
+        for (NSString *keyPath in self.selectorSubcribers.allKeys) {
+            selectorSubcriberIds = self.selectorSubcribers[keyPath];
+            [selectorSubcriberIds removeObject:subcriberId];
+        }
+    });
 }
 
 -(void)syncupValues {
@@ -266,20 +329,22 @@ static dispatch_queue_t getUUIDQueue() {
 
 #pragma mark add/remove funcs
 -(void)addObservingProperties {
-    __weak typeof(self) weakSelf = self;
+    weakify(self);
     dispatch_sync(self.observerQueue, ^{
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (strongSelf.obsAdded) {
+        strongify(self);
+        if (self.obsAdded) {
             return;
         }
-        strongSelf.obsAdded = YES;
+        self.obsAdded = YES;
         
-        [strongSelf addObservingPropertiesForObject:strongSelf];
+        [self addObservingPropertiesForObject:self];
     });
 }
 
 -(void)addSyncupObservingProperties {
+    weakify(self);
     dispatch_sync(self.observerQueue, ^{
+        strongify(self);
         [self addObservingPropertiesForObject:self.syncupObject];
     });
 }
@@ -298,18 +363,20 @@ static dispatch_queue_t getUUIDQueue() {
 }
 
 -(void)removeObservingProperties {
-    __weak typeof(self) weakSelf = self;
+    weakify(self);
     dispatch_sync(self.observerQueue, ^{
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (strongSelf.obsAdded) {
-            [strongSelf removeObservingPropertiesForObject:strongSelf];
+        strongify(self);
+        if (self.obsAdded) {
+            [self removeObservingPropertiesForObject:self];
         }
-        strongSelf.obsAdded = NO;
+        self.obsAdded = NO;
     });
 }
 
 -(void)removeSyncupObservingProperties {
+    weakify(self);
     dispatch_sync(self.observerQueue, ^{
+        strongify(self);
         [self removeObservingPropertiesForObject:self.syncupObject];
     });
 }
@@ -332,7 +399,9 @@ static dispatch_queue_t getUUIDQueue() {
 }
 
 -(void)removeSubcribers {
+    weakify(self);
     dispatch_sync(self.excutionQueue, ^{
+        strongify(self);
         [self.subcriberIds removeAllObjects];
         [self.selectorSubcribers removeAllObjects];
         [self.subcriberById removeAllObjects];
