@@ -1,6 +1,6 @@
 //
 //  ObservableObject+Private.h
-//  CoredataVIPER
+//  ObservableObject
 //
 //  Created by Tung Nguyen on 2/5/18.
 //  Copyright © 2018 Tung Nguyen. All rights reserved.
@@ -16,7 +16,7 @@
 
 @property (nonatomic, copy) NSString * _Nullable bagId;
 @property (nonatomic, strong) NSHashTable *_Nullable subcribers;
-@property (nonatomic, strong) dispatch_queue_t subcriberQueue;
+@property (nonatomic, strong) dispatch_queue_t _Nullable subcriberQueue;
 
 -(void)registerSubcriberObject:(Subcriber *)sub;
 
@@ -27,7 +27,7 @@
 @property (nonatomic, copy) NSString * _Nonnull subcriberId;
 @property (nonatomic, weak) CleanBag * _Nullable bag;
 @property (nonatomic, weak) ObservableObject * _Nullable observableObj;
-@property (nonatomic, strong) dispatch_queue_t observeQueue;
+@property (nonatomic, strong) dispatch_queue_t _Nullable observeQueue;
 
 @end
 
@@ -36,11 +36,11 @@
 @property (nonatomic, strong) NSMutableArray <NSString *> * _Nullable subcriberIds;
 @property (nonatomic, strong) NSMutableDictionary <NSString *, NSMutableArray <NSString *> *> * _Nullable selectorSubcribers;
 @property (nonatomic, strong) NSMutableDictionary <NSString *, Subcriber *> * _Nullable subcriberById;
-@property (nonatomic, strong) dispatch_queue_t subIdsQueue;
-@property (nonatomic, strong) dispatch_queue_t subByIdsQueue;
-@property (nonatomic, strong) dispatch_queue_t selectorSubQueue;
+@property (nonatomic, strong) dispatch_queue_t _Nullable subIdsQueue;
+@property (nonatomic, strong) dispatch_queue_t _Nullable subByIdsQueue;
+@property (nonatomic, strong) dispatch_queue_t _Nullable selectorSubQueue;
 @property (nonatomic, strong) dispatch_queue_t _Nullable observerQueue;
-@property (nonatomic, strong) dispatch_queue_t _Nullable excutionQueue;
+@property (nonatomic, strong) dispatch_queue_t _Nullable executionQueue;
 @property (nonatomic, assign) BOOL obsAdded;
 
 @property (nonatomic, weak) ObservableObject * _Nullable syncupObject;

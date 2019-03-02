@@ -1,6 +1,6 @@
 //
 //  ObservableObject.m
-//  CoredataVIPER
+//  ObservableObject
 //
 //  Created by Tung Nguyen on 2/2/18.
 //  Copyright © 2018 Tung Nguyen. All rights reserved.
@@ -90,13 +90,9 @@ static dispatch_queue_t UUIDQueue() {
 
 -(void)dealloc {
     NSLog(@"CleanBag === DEALLOC");
-    weakify(self);
-    dispatch_sync(_subcriberQueue, ^{
-        strongify(self);
-        for (Subcriber *sub in self.subcribers.allObjects) {
-            sub.bag = nil;
-        }
-    });
+    for (Subcriber *sub in self.subcribers.allObjects) {
+        sub.bag = nil;
+    }
 }
 
 @end
@@ -173,7 +169,7 @@ static dispatch_queue_t UUIDQueue() {
         return self;
     }
     weakify(self);
-    dispatch_sync(self.excutionQueue, ^{
+    dispatch_sync(self.executionQueue, ^{
         strongify(self);
         if (self.syncupObject) {
             [self removeSyncupObservingProperties];
@@ -195,7 +191,7 @@ static dispatch_queue_t UUIDQueue() {
 -(Subcriber *_Nonnull)subcribe:(SubcribeBlock _Nonnull)subBlock {
     __block Subcriber *subcriber;
     weakify(self);
-    dispatch_sync(self.excutionQueue, ^{
+    dispatch_sync(self.executionQueue, ^{
         strongify(self);
         subcriber = [self addSubcriberWithBlock:subBlock];
         [self.subcriberIds addObject:subcriber.subcriberId];
@@ -206,7 +202,7 @@ static dispatch_queue_t UUIDQueue() {
 -(Subcriber *_Nonnull)subcribeKeySelector:(SEL _Nonnull)propertySelector binding:(SubcribeBlock _Nonnull)subBlock {
     __block Subcriber *subcriber;
     weakify(self);
-    dispatch_sync(self.excutionQueue, ^{
+    dispatch_sync(self.executionQueue, ^{
         strongify(self);
         subcriber = [self addSubcriberWithBlock:subBlock];
         [self addSubcriber:subcriber forKeyPath:NSStringFromSelector(propertySelector)];
@@ -229,7 +225,7 @@ static dispatch_queue_t UUIDQueue() {
     }
     
     weakify(self);
-    dispatch_sync(self.excutionQueue, ^{
+    dispatch_sync(self.executionQueue, ^{
         strongify(self);
         dispatch_sync(self.subByIdsQueue, ^{
             strongify(self);
@@ -363,22 +359,14 @@ static dispatch_queue_t UUIDQueue() {
 }
 
 -(void)removeObservingProperties {
-    weakify(self);
-    dispatch_sync(self.observerQueue, ^{
-        strongify(self);
-        if (self.obsAdded) {
-            [self removeObservingPropertiesForObject:self];
-        }
-        self.obsAdded = NO;
-    });
+    if (self.obsAdded) {
+        [self removeObservingPropertiesForObject:self];
+    }
+    self.obsAdded = NO;
 }
 
 -(void)removeSyncupObservingProperties {
-    weakify(self);
-    dispatch_sync(self.observerQueue, ^{
-        strongify(self);
-        [self removeObservingPropertiesForObject:self.syncupObject];
-    });
+    [self removeObservingPropertiesForObject:self.syncupObject];
 }
 
 -(void)removeObservingPropertiesForObject:(NSObject *)object {
@@ -399,13 +387,9 @@ static dispatch_queue_t UUIDQueue() {
 }
 
 -(void)removeSubcribers {
-    weakify(self);
-    dispatch_sync(self.excutionQueue, ^{
-        strongify(self);
-        [self.subcriberIds removeAllObjects];
-        [self.selectorSubcribers removeAllObjects];
-        [self.subcriberById removeAllObjects];
-    });
+    [self.subcriberIds removeAllObjects];
+    [self.selectorSubcribers removeAllObjects];
+    [self.subcriberById removeAllObjects];
 }
 
 #pragma mark lazy loading
@@ -430,11 +414,11 @@ static dispatch_queue_t UUIDQueue() {
     return _selectorSubcribers;
 }
 
--(dispatch_queue_t)excutionQueue {
-    if (!_excutionQueue) {
-        _excutionQueue = dispatch_queue_create("com.observable.excution", DISPATCH_QUEUE_SERIAL);
+-(dispatch_queue_t)executionQueue {
+    if (!_executionQueue) {
+        _executionQueue = dispatch_queue_create("com.observable.excution", DISPATCH_QUEUE_SERIAL);
     }
-    return _excutionQueue;
+    return _executionQueue;
 }
 
 -(dispatch_queue_t)observerQueue {
@@ -442,6 +426,27 @@ static dispatch_queue_t UUIDQueue() {
         _observerQueue = dispatch_queue_create("com.observable.observer", DISPATCH_QUEUE_SERIAL);
     }
     return _observerQueue;
+}
+
+-(dispatch_queue_t)subByIdsQueue {
+    if (!_subByIdsQueue) {
+        _subByIdsQueue = dispatch_queue_create("com.observable.subbyids", DISPATCH_QUEUE_SERIAL);
+    }
+    return _subByIdsQueue;
+}
+
+-(dispatch_queue_t)selectorSubQueue {
+    if (!_selectorSubQueue) {
+        _selectorSubQueue = dispatch_queue_create("com.observable.selectorsub", DISPATCH_QUEUE_SERIAL);
+    }
+    return _selectorSubQueue;
+}
+
+-(dispatch_queue_t)subIdsQueue {
+    if (!_subIdsQueue) {
+        _subIdsQueue = dispatch_queue_create("com.observable.subids", DISPATCH_QUEUE_SERIAL);
+    }
+    return _subIdsQueue;
 }
 
 #pragma mark - Dealloc
