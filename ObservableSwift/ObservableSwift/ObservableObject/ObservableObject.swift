@@ -33,11 +33,8 @@ class CleanBag: NSObject {
     }
     
     deinit {
-        subcriberQueue.sync { [weak self] in
-            guard let `self` = self else {return}
-            for sub in self.subcribers.allObjects as! [Subcriber] {
-                sub.bag = nil
-            }
+        for sub in self.subcribers.allObjects as! [Subcriber] {
+            sub.bag = nil
         }
     }
 }
@@ -223,6 +220,8 @@ class ObservableObject: NSObject {
     }
     
     func syncupValueForKeyPath(_ keyPath: String) {
+        guard let obj = syncupObject, obj.responds(to: Selector(keyPath)) else {return}
+        guard self.responds(to: Selector(keyPath)) else {return}
         let value = syncupObject?.value(forKey: keyPath)
         setValue(value, forKey: keyPath)
     }
@@ -252,19 +251,14 @@ class ObservableObject: NSObject {
     }
     
     func removeObservingProperties() {
-        observationQueue.sync { [weak self] in
-            guard let `self` = self else {return}
-            guard self.obsAdded else {return}
-            self.obsAdded = false
-            self.removeObservingPropertiesForObject(self)
-        }
+        guard self.obsAdded else {return}
+        self.obsAdded = false
+        self.removeObservingPropertiesForObject(self)
     }
     
     func removeSyncupObservingProperties() {
-        observationQueue.sync { [weak self] in
-            guard let `self` = self, let obj = self.syncupObject else {return}
-            self.removeObservingPropertiesForObject(obj)
-        }
+        guard let obj = self.syncupObject else {return}
+        self.removeObservingPropertiesForObject(obj)
     }
     
     func removeObservingPropertiesForObject(_ object: NSObject) {
@@ -275,12 +269,9 @@ class ObservableObject: NSObject {
     }
     
     func removeSubcribers() {
-        executionQueue.sync { [weak self] in
-            guard let `self` = self else {return}
-            self.subcriberIds.removeAll()
-            self.selectorSubcribers.removeAll()
-            self.subcriberById.removeAll()
-        }
+        self.subcriberIds.removeAll()
+        self.selectorSubcribers.removeAll()
+        self.subcriberById.removeAll()
     }
     
     deinit {
