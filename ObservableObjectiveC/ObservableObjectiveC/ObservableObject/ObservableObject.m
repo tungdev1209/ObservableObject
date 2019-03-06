@@ -319,6 +319,8 @@ static dispatch_queue_t UUIDQueue() {
 }
 
 -(void)syncupValueForKeypath:(NSString *)keypath {
+    if (![self.syncupObject respondsToSelector:NSSelectorFromString(keypath)]) {return;}
+    if (![self respondsToSelector:NSSelectorFromString(keypath)]) {return;}
     id value = [self.syncupObject valueForKey:keypath];
     [self setValue:value forKey:keypath];
 }
